@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>TETRIS — рабочая версия</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root{
+    --cell: 28px;
+    --bg1: #0f172a;
+    --bg2: linear-gradient(135deg,#071226,#0b3b53 40%, #0f172a 100%);
+    --panel: rgba(255,255,255,0.06);
+    --accent: #00eaff;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg2);color:#e6f0ff}
+  .wrap{
+    min-height:100%;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:28px;
+    padding:28px;
+    box-sizing:border-box;
+  }
+
+  .board {
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    padding:18px;
+    border-radius:14px;
+    box-shadow: 0 10px 30px rgba(2,6,23,0.6), 0 0 30px rgba(0,234,255,0.03) inset;
+    display:flex;
+    gap:18px;
+    align-items:flex-start;
+  }
+
+  canvas {
+    display:block;
+    background: rgba(0,0,0,0.55);
+    border-radius:8px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+  }
+
+  .panel {
+    width:260px;
+    padding:14px;
+    border-radius:12px;
+    background:var(--panel);
+    box-shadow: 0 6px 24px rgba(2,6,23,0.5);
+  }
+
+  .panel h2{margin:4px 0 12px;font-size:18px}
+  .score {font-size:28px;font-weight:700;margin-bottom:8px}
+  .small {font-size:13px;color:rgba(230,240,255,0.7)}
+  .btn {
+    width:100%;
+    margin-top:12px;
+    padding:10px 8px;
+    border-radius:8px;
+    border:0;
+    background:linear-gradient(180deg,var(--accent),#00bcd4);
+    color:#002028;
+    font-weight:700;
+    cursor:pointer;
+    box-shadow: 0 6px 18px rgba(0,234,255,0.12);
+  }
+  .controls {margin-top:12px; display:grid; gap:8px}
+  .preview {
+    margin-top:14px;
+    display:flex;
+    gap:8px;
+    align-items:center;
+    justify-content:center;
+  }
+  .hint{margin-top:12px;font-size:13px;color:rgba(230,240,255,0.6)}
+  footer{position:fixed;left:12px;bottom:12px;color:rgba(230,240,255,0.35);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="board">
+    <canvas id="canvas" width="280" height="560"></canvas>
+    <div class="panel">
+      <h2>ТЕТРИС — Рабочая версия</h2>
+      <div class="score">Очки: <span id="score">0</span></div>
+      <div class="small">Уровень: <span id="level">1</span></div>
+
+      <button id="startBtn" class="btn">Старт</button>
+      <div class="controls">
+        <div class="small">Управление клавишами: ← → — перемещение, ↑ — вращение, ↓ — ускорение, Space — мгновенное падение</div>
+        <div class="preview" id="nextPreview"></div>
+        <div class="hint">Если игра зависает — нажми Старт ещё раз.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>Скопируй этот файл как <strong>tetris.html</strong> и открой в браузере.</footer>
+
+<script>
+/* ----- Настройки ----- */
+const COLS = 10;
+const ROWS = 20;
+const CELL = 28; // px
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const levelEl = document.getElementById('level');
+const startBtn = document.getElementById('startBtn');
+const nextPreview = document.getElementById('nextPreview');
+
+canvas.width = COLS * CELL;
+canvas.height = ROWS * CELL;
+
+/* цвета фигур (индекс соответствует числу в матрице) */
+const COLORS = [
+  null,
+  '#FF4D4D', // 1
+  '#2AD62A', // 2
+  '#3D7BFF', // 3
+  '#F26AFF', // 4
+  '#FFD23D', // 5
+  '#4DD0E1', // 6
+  '#A64DFF'  // 7
+];
+
+/* фигуры */
+const PIECES = {
+  'T': [[0,1,0],[1,1,1],[0,0,0]],
+  'O': [[2,2],[2,2]],
+  'L': [[0,0,3],[3,3,3],[0,0,0]],
+  'J': [[4,0,0],[4,4,4],[0,0,0]],
+  'I': [[0,5,0,0],[0,5,0,0],[0,5,0,0],[0,5,0,0]],
+  'S': [[0,6,6],[6,6,0],[0,0,0]],
+  'Z': [[7,7,0],[0,7,7],[0,0,0]]
+};
+
+function createMatrix(w,h){
+  const m = [];
+  for(let y=0;y<h;y++) m.push(new Array(w).fill(0));
+  return m;
+}
+
+/* состояние игры */
+let arena = createMatrix(COLS, ROWS);
+let player = { pos:{x:0,y:0}, matrix:null, score:0 };
+let nextPiece = null;
+let dropCounter = 0;
+let dropInterval = 800;
+let lastTime = 0;
+let running = false;
+let level = 1;
+
+/* утилиты */
+function drawCell(x,y,color){
+  ctx.fillStyle = color;
+  ctx.fillRect(x*CELL, y*CELL, CELL, CELL);
+  // лёгкая рамка
+  ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x*CELL+0.5, y*CELL+0.5, CELL-1, CELL-1);
+}
+
+function drawMatrix(matrix, offset){
+  for(let y=0;y<matrix.length;y++){
+    for(let x=0;x<matrix[y].length;x++){
+      const val = matrix[y][x];
+      if(val !== 0){
+        drawCell(x + offset.x, y + offset.y, COLORS[val]);
+      }
+    }
+  }
+}
+
+function draw(){
+  // фон
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // арена
+  drawMatrix(arena, {x:0,y:0});
+  // текущая фигура
+  if(player.matrix) drawMatrix(player.matrix, player.pos);
+}
+
+/* столкновение */
+function collide(arena, player){
+  const m = player.matrix;
+  const o = player.pos;
+  for(let y=0;y<m.length;y++){
+    for(let x=0;x<m[y].length;x++){
+      if(m[y][x] !== 0){
+        const ay = y + o.y;
+        const ax = x + o.x;
+        if(ay < 0 || ay >= ROWS || ax < 0 || ax >= COLS) return true;
+        if(arena[ay][ax] !== 0) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/* слияние фигуры в арену */
+function merge(arena, player){
+  player.matrix.forEach((row,y) => {
+    row.forEach((val,x) => {
+      if(val !== 0){
+        const ay = y + player.pos.y;
+        const ax = x + player.pos.x;
+        if(ay >= 0 && ay < ROWS && ax >=0 && ax < COLS){
+          arena[ay][ax] = val;
+        }
+      }
+    });
+  });
+}
+
+/* поворот (по часовой) */
+function rotate(matrix){
+  const N = matrix.length;
+  const res = [];
+  for(let x=0;x<N;x++){
+    const col = [];
+    for(let y=N-1;y>=0;y--){
+      col.push(matrix[y][x] ?? 0);
+    }
+    res.push(col);
+  }
+  // удалить пустые строки/столбцы по краям для не-квадратных
+  // (но для простоты мы оставим как есть — работает с нашими матрицами)
+  return res;
+}
+
+/* очистка заполненных линий и начисление очков */
+function arenaSweep(){
+  let lines = 0;
+  for(let y = ROWS - 1; y >= 0; y--){
+    if(arena[y].every(v => v !== 0)){
+      arena.splice(y,1);
+      arena.unshift(new Array(COLS).fill(0));
+      lines++;
+      y++; // проверить ту же строку ещё раз
+    }
+  }
+  if(lines > 0){
+    // простая таблица очков (чем больше линий за раз — тем значительно больше очков)
+    const points = [0, 100, 300, 700, 1500];
+    player.score += points[lines] * level;
+    // небольшой прогресс уровня: каждые 10 линий — повышение уровня ускоряющее падение
+    // подсчитываем полные заполненные строки (можно хранить отдельно), но для простоты:
+    // повысим уровень, если очков достаточно
+    if(player.score >= level * 1000) {
+      level++;
+      dropInterval = Math.max(120, dropInterval - 80); // ускоряем падение, но не слишком
+    }
+    updateHUD();
+  }
+}
+
+/* сброс фигуры */
+function randomPiece(){
+  const keys = Object.keys(PIECES);
+  return JSON.parse(JSON.stringify(PIECES[keys[Math.floor(Math.random()*keys.length)]]));
+}
+
+function spawnPiece(){
+  if(!nextPiece) nextPiece = randomPiece();
+  player.matrix = nextPiece;
+  nextPiece = randomPiece();
+  player.pos.y = 0;
+  player.pos.x = Math.floor((COLS - player.matrix[0].length) / 2);
+
+  // если сразу коллизия — игра окончена
+  if(collide(arena, player)){
+    running = false;
+    startBtn.textContent = 'Старт';
+    alert('Игра окончена — попробуйте снова');
+    // очистим арену
+    arena = createMatrix(COLS, ROWS);
+    player.score = 0;
+    level = 1;
+    dropInterval = 800;
+    updateHUD();
+  }
+  renderNextPreview();
+}
+
+/* мгновенное падение (hard drop) */
+function hardDrop(){
+  while(!collide(arena, player)){
+    player.pos.y++;
+  }
+  player.pos.y--;
+  merge(arena, player);
+  arenaSweep();
+  spawnPiece();
+  dropCounter = 0;
+}
+
+/* опустить на 1 */
+function drop(){
+  player.pos.y++;
+  if(collide(arena, player)){
+    player.pos.y--;
+    merge(arena, player);
+    arenaSweep();
+    spawnPiece();
+  }
+  dropCounter = 0;
+}
+
+/* движение влево/вправо */
+function move(dir){
+  player.pos.x += dir;
+  if(collide(arena, player)) player.pos.x -= dir;
+}
+
+/* попытка повернуть, с корректировкой по стенкам (kick) */
+function tryRotate(){
+  const rotated = rotate(player.matrix);
+  const prevX = player.pos.x;
+  let offset = 0;
+  player.matrix = rotated;
+  // простой 'wall kick' — двигаем фигуру влево/вправо, пока не устраним коллизию (ограничим 3 шага)
+  while(collide(arena, player) && offset < 4){
+    offset++;
+    player.pos.x += (offset % 2 === 1) ? offset : -offset;
+  }
+  if(collide(arena, player)){
+    // откат
+    player.matrix = rotate(rotate(rotate(player.matrix))); // повернуть 3 раза = вернуть исходное
+    player.pos.x = prevX;
+  }
+}
+
+/* главный цикл */
+function update(time = 0){
+  if(!running) return;
+  const delta = time - lastTime;
+  lastTime = time;
+  dropCounter += delta;
+  if(dropCounter > dropInterval) drop();
+  draw();
+  requestAnimationFrame(update);
+}
+
+/* HUD */
+function updateHUD(){
+  scoreEl.textContent = player.score;
+  levelEl.textContent = level;
+}
+
+/* отрисовка превью следующей фигуры */
+function renderNextPreview(){
+  nextPreview.innerHTML = ''; // очистить
+  const canvasN = document.createElement('canvas');
+  const SIZE = CELL * 4;
+  canvasN.width = SIZE;
+  canvasN.height = SIZE;
+  canvasN.style.width = '100%';
+  canvasN.style.height = '100%';
+  canvasN.style.borderRadius = '6px';
+  canvasN.style.background = 'rgba(0,0,0,0.5)';
+  nextPreview.appendChild(canvasN);
+  const c = canvasN.getContext('2d');
+  // центрируем 4x4 сетку
+  const m = nextPiece || [[0]];
+  const offsetX = Math.floor((4 - m[0].length)/2);
+  const offsetY = Math.floor((4 - m.length)/2);
+
+  for(let y=0;y<m.length;y++){
+    for(let x=0;x<m[y].length;x++){
+      const v = m[y][x];
+      if(v !== 0){
+        c.fillStyle = COLORS[v];
+        c.fillRect((x+offsetX)*CELL, (y+offsetY)*CELL, CELL, CELL);
+        c.strokeStyle = 'rgba(0,0,0,0.2)';
+        c.strokeRect((x+offsetX)*CELL+0.5, (y+offsetY)*CELL+0.5, CELL-1, CELL-1);
+      }
+    }
+  }
+}
+
+/* обработка клавиш */
+document.addEventListener('keydown', e => {
+  if(!running && e.key === ' ') return; // space — не стартует, только при running
+  switch(e.key){
+    case 'ArrowLeft': move(-1); draw(); break;
+    case 'ArrowRight': move(1); draw(); break;
+    case 'ArrowDown': drop(); updateHUD(); draw(); break;
+    case 'ArrowUp': tryRotate(); draw(); break;
+    case ' ': hardDrop(); updateHUD(); draw(); break;
+  }
+});
+
+/* кнопка старт/пауза */
+startBtn.addEventListener('click', ()=>{
+  if(!running){
+    // запуск новой игры, если arena пустая и score=0 — норм.
+    if(player.score === 0 && player.matrix === null){
+      arena = createMatrix(COLS, ROWS);
+      player.score = 0;
+      nextPiece = null;
+      level = 1;
+      dropInterval = 800;
+    }
+    running = true;
+    startBtn.textContent = 'Пауза';
+    spawnPiece();
+    lastTime = 0;
+    requestAnimationFrame(update);
+  } else {
+    running = false;
+    startBtn.textContent = 'Старт';
+  }
+});
+
+/* Инициализация (показываем пустое поле и превью) */
+function init(){
+  arena = createMatrix(COLS, ROWS);
+  player.score = 0;
+  level = 1;
+  player.matrix = null;
+  nextPiece = randomPiece();
+  updateHUD();
+  renderNextPreview();
+  draw();
+}
+init();
+
+</script>
+</body>
+</html>
